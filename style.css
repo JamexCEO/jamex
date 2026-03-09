@@ -60,7 +60,7 @@ h2 a {
 
 h3 {
 	color: #ffc000;
-	text-align: left;
+	text-align: center;
 	font-family: Verdana, sans-serif;
 }
 
@@ -350,4 +350,74 @@ body.dark .no-results {
 /* tags are for search only; hide visually but keep in DOM */
 .tags {
     display: none;
+}
+
+.youtube-box {
+  background-color: #f9f9f9; /* Light grey background to make the red pop */
+  padding: 15px;
+  border-radius: 10px;
+  display: inline-block; /* Keeps the box tight around the button */
+  margin: 20px 0;
+  border: 1px solid #ddd;
+}
+
+/* If you are in Dark Mode, use this instead: */
+.dark-mode .youtube-box {
+  background-color: #222;
+  border: 1px solid #444;
+} 
+
+/* Style the box */
+.collapse {
+  background-color: #EBFFF4;
+  color: #ff0000;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  font-size: 24px;
+  border: 1px solid red;
+}
+
+/* Style the clickable heading */
+.collapse summary {
+  padding: 15px;
+  cursor: pointer;
+  font-weight: bold;
+  list-style: none; /* Removes the default arrow in some browsers */
+  background-color: white;
+}
+
+/* Change color on hover */
+.collapse summary:hover {
+  background-color: #D5FFE8;
+}
+
+/* Style the hidden content */
+.collapse .content {
+  padding: 15px;
+  border-top: 1px solid #ff0000;
+  line-height: 1.6;
+  color: black;
+  font-size: 20px;
+}
+
+/* Dark Mode Version */
+.dark .collapse {
+  background-color: #363636; /* Deep charcoal */
+  color: red;          /* Brighter red for better contrast on dark */
+  border: 1px solid red;
+}
+
+.dark .collapse summary {
+  background-color: black;
+}
+
+.dark .collapse summary:hover {
+  background-color: #262626; /* Slightly lighter on hover */
+}
+
+.dark .collapse .content {
+  border-top: 1px solid red;
+  color: #e0e0e0;           /* Off-white for easy reading */
+  background-color: #363636;
 }
