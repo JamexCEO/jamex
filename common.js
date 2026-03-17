@@ -28,24 +28,49 @@
     });
 
     // --- dark mode toggle logic ---
+    // Three states: 'auto' | 'light' | 'dark'
+    // Cycle order: auto → light → dark → auto
     const themeToggle = document.getElementById('theme-toggle');
-    const setTheme = (dark) => {
-        document.body.classList.toggle('dark', dark);
-        themeToggle.textContent = dark ? '☀️' : '🌙';
-        localStorage.setItem('dark-mode', dark ? '1' : '0');
+    const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+
+    const ICONS = { auto: '🌗', light: '☀️', dark: '🌙' };
+    const LABELS = { auto: 'Auto (system)', light: 'Light mode', dark: 'Dark mode' };
+
+    const applyTheme = (mode) => {
+        const isDark = mode === 'dark' || (mode === 'auto' && systemDark && systemDark.matches);
+        document.body.classList.toggle('dark', isDark);
+        if (themeToggle) {
+            themeToggle.textContent = ICONS[mode];
+            themeToggle.setAttribute('aria-label', LABELS[mode]);
+            themeToggle.dataset.mode = mode;
+        }
     };
+
+    const setMode = (mode) => {
+        localStorage.setItem('theme-mode', mode);
+        applyTheme(mode);
+    };
+
+    const getMode = () => localStorage.getItem('theme-mode') || 'auto';
+
     if (themeToggle) {
         themeToggle.addEventListener('click', () => {
-            setTheme(!document.body.classList.contains('dark'));
+            const current = getMode();
+            const next = current === 'auto' ? 'light' : current === 'light' ? 'dark' : 'auto';
+            setMode(next);
         });
     }
-    // initialize theme from storage or system preference
-    const stored = localStorage.getItem('dark-mode');
-    if (stored !== null) {
-        setTheme(stored === '1');
-    } else {
-        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        setTheme(prefersDark);
+
+    // Initialize theme on page load
+    applyTheme(getMode());
+
+    // When in 'auto' mode, react to system theme changes live
+    if (systemDark) {
+        systemDark.addEventListener('change', () => {
+            if (getMode() === 'auto') {
+                applyTheme('auto');
+            }
+        });
     }
 
     // simple search helper with highlighting – pages call this if they need it
@@ -53,83 +78,57 @@
         const input = document.getElementById(inputId);
         if (!input) return;
         const items = document.querySelectorAll(itemSelector);
-
+        
         // Create a "no results" message element
         const noResultsMsg = document.createElement('div');
         noResultsMsg.className = 'no-results';
         noResultsMsg.textContent = 'No results found';
         noResultsMsg.style.display = 'none';
-        // Insert after the tip (.small-text) if it follows the search container,
-        // otherwise fall back to inserting directly after the search container
-        const searchContainer = input.parentNode;
-        const tip = searchContainer.nextElementSibling;
-        const anchor = (tip && tip.classList.contains('small-text')) ? tip : searchContainer;
-        anchor.insertAdjacentElement('afterend', noResultsMsg);
-
+        input.parentNode.insertAdjacentElement('afterend', noResultsMsg);
+        
+        // Store original HTML for all items so we can restore and re-highlight
+        const originals = new Map();
+        items.forEach(el => {
+            originals.set(el, el.innerHTML);
+        });
+        
         input.addEventListener('input', () => {
             const q = input.value.trim();
             const qLower = q.toLowerCase();
             let visibleCount = 0;
-
+            
             items.forEach(el => {
-                // Remove any existing <mark> highlights without touching media elements
-                removeHighlights(el);
-
+                // Restore original HTML first
+                el.innerHTML = originals.get(el);
+                
                 // Show/hide based on match
                 const matches = el.textContent.toLowerCase().includes(qLower);
                 el.style.display = matches ? '' : 'none';
                 if (matches) visibleCount++;
-
+                
                 // Highlight matches if query is not empty and entry is visible
                 if (q && matches) {
                     highlightInNode(el, q);
                 }
             });
-
+            
             // Show "no results" message if search is active but nothing matches
             noResultsMsg.style.display = (q && visibleCount === 0) ? '' : 'none';
         });
     }
-
-    // Remove all <mark> elements by unwrapping them back to plain text,
-    // leaving all other DOM nodes (including <video>, <img>) completely untouched.
-    function removeHighlights(node) {
-        const marks = node.querySelectorAll('mark');
-        // Iterate in reverse so parent marks are unwrapped after their children
-        Array.from(marks).reverse().forEach(mark => {
-            const parent = mark.parentNode;
-            if (!parent) return;
-            // Replace <mark> with its text content as a plain text node
-            parent.replaceChild(document.createTextNode(mark.textContent), mark);
-            // Merge adjacent text nodes to keep the DOM tidy
-            parent.normalize();
-        });
-    }
-
-    // helper: highlight all occurrences of query text in a DOM node,
-    // skipping any media elements so they are never modified
+    
+    // helper: highlight all occurrences of query text in a DOM node
     function highlightInNode(node, query) {
         const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`(${escapedQuery})`, 'gi');
-
+        
         const walker = document.createTreeWalker(
             node,
             NodeFilter.SHOW_TEXT,
-            {
-                acceptNode(textNode) {
-                    // Skip text inside media or interactive elements
-                    const skipTags = new Set(['VIDEO', 'AUDIO', 'SCRIPT', 'STYLE', 'IFRAME']);
-                    let ancestor = textNode.parentNode;
-                    while (ancestor && ancestor !== node) {
-                        if (skipTags.has(ancestor.tagName)) return NodeFilter.FILTER_REJECT;
-                        ancestor = ancestor.parentNode;
-                    }
-                    return NodeFilter.FILTER_ACCEPT;
-                }
-            },
+            null,
             false
         );
-
+        
         const nodesToProcess = [];
         let textNode;
         while (textNode = walker.nextNode()) {
@@ -137,7 +136,7 @@
                 nodesToProcess.push(textNode);
             }
         }
-
+        
         // Process in reverse to maintain node references
         nodesToProcess.reverse().forEach(textNode => {
             const span = document.createElement('span');
@@ -145,6 +144,6 @@
             textNode.parentNode.replaceChild(span, textNode);
         });
     }
-
+    
     window.initSearch = initSearch;
 })();
