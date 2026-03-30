@@ -235,4 +235,94 @@
     if (document.getElementById('latest-news-container')) {
         loadLatestNews();
     }
+
+    // --- Article anchor links ---
+    // Auto-assigns IDs to articles and injects a "Copy link" button into each.
+    // Supported selectors: .news-entry, .changelog-entry, .event, .hall-of-fame-entry
+    // ID is derived from the article's h2 text, slugified.
+    // If the page URL has a #hash on load, scrolls smoothly to that article.
+    (function initArticleLinks() {
+        const ARTICLE_SELECTORS = [
+            '.news-entry',
+            '.changelog-entry',
+            '.event',
+            '.hall-of-fame-entry',
+        ];
+
+        const articles = document.querySelectorAll(ARTICLE_SELECTORS.join(', '));
+        if (!articles.length) return;
+
+        // Turn a heading string into a URL-safe slug
+        function slugify(text) {
+            return text
+                .toLowerCase()
+                .trim()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+        }
+
+        // Assign IDs and inject buttons
+        articles.forEach(article => {
+            const h2 = article.querySelector('h2');
+            if (!h2) return;
+
+            // Build a slug from the heading; fall back to a random id if empty
+            const slug = slugify(h2.textContent) || ('article-' + Math.random().toString(36).slice(2, 7));
+
+            // Avoid duplicate IDs on the same page
+            let id = slug;
+            let suffix = 2;
+            while (document.getElementById(id) && document.getElementById(id) !== article) {
+                id = slug + '-' + suffix++;
+            }
+            article.id = id;
+
+            // Build the copy-link button and insert it right after the h2
+            const btn = document.createElement('button');
+            btn.className = 'article-link-btn';
+            btn.setAttribute('aria-label', 'Copy link to this article');
+            btn.textContent = '🔗 Copy link';
+
+            btn.addEventListener('click', () => {
+                const url = window.location.origin + window.location.pathname + '#' + id;
+                navigator.clipboard.writeText(url).then(() => {
+                    btn.textContent = '✅ Copied!';
+                    btn.classList.add('article-link-btn--copied');
+                    setTimeout(() => {
+                        btn.textContent = '🔗 Copy link';
+                        btn.classList.remove('article-link-btn--copied');
+                    }, 2000);
+                }).catch(() => {
+                    // Fallback for browsers without clipboard API
+                    const ta = document.createElement('textarea');
+                    ta.value = window.location.origin + window.location.pathname + '#' + id;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    btn.textContent = '✅ Copied!';
+                    btn.classList.add('article-link-btn--copied');
+                    setTimeout(() => {
+                        btn.textContent = '🔗 Copy link';
+                        btn.classList.remove('article-link-btn--copied');
+                    }, 2000);
+                });
+            });
+
+            h2.insertAdjacentElement('afterend', btn);
+        });
+
+        // Scroll to the article matching the URL hash (after a short delay so the
+        // page has finished laying out, including any dynamically injected content)
+        if (window.location.hash) {
+            const target = document.getElementById(window.location.hash.slice(1));
+            if (target) {
+                setTimeout(() => {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 150);
+            }
+        }
+    })();
 })();

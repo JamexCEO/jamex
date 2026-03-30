@@ -465,8 +465,48 @@ body.dark .date {
     letter-spacing: 0.02em;
 }
 
-body.dark .visible-tags .tag,
-body.dark .tag {
-    background-color: #b71c1c;
-    color: #fff;
+
+/* ── Article anchor / copy-link button ── */
+.article-link-btn {
+    display: block;
+    margin: -8px auto 14px auto;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-family: Arial, sans-serif;
+    color: #888;
+    background: transparent;
+    border: 1px solid #ccc;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    text-align: center;
+}
+
+.article-link-btn:hover {
+    color: #e53935;
+    border-color: #e53935;
+    background: rgba(229, 57, 53, 0.06);
+}
+
+.article-link-btn--copied {
+    color: #2e7d32 !important;
+    border-color: #2e7d32 !important;
+    background: rgba(46, 125, 50, 0.08) !important;
+}
+
+body.dark .article-link-btn {
+    color: #aaa;
+    border-color: #555;
+}
+
+body.dark .article-link-btn:hover {
+    color: #ff6b6b;
+    border-color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.08);
+}
+
+body.dark .article-link-btn--copied {
+    color: #66bb6a !important;
+    border-color: #66bb6a !important;
+    background: rgba(102, 187, 106, 0.1) !important;
 }
