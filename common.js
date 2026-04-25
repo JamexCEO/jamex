@@ -37,49 +37,244 @@
     // Cycle when system is light: Auto(🌓) → Dark(🌙) → Light(☀️) → Auto(🌓)
 
     const themeToggle = document.getElementById('theme-toggle');
+    const ACCOUNT_SETTINGS_KEY = 'jamex-account-settings';
+    const LIGHT_BG_KEY = 'jamex-light-bg';
+    const DARK_BG_KEY = 'jamex-dark-bg';
+    const PAGE_THEME_AUTOMATIONS_KEY = 'jamex-page-theme-automations';
+    const SETTINGS_THEME_PAGE = '__settings__';
+    const PAGE_THEME_AUTOMATION_PAGES = [
+        { value: 'index.html', label: 'Homepage' },
+        { value: 'events.html', label: 'Events' },
+        { value: 'news.html', label: 'News' },
+        { value: 'games.html', label: 'Games' },
+        { value: 'hall-of-fame.html', label: 'Hall of Fame' },
+        { value: 'products.html', label: 'Products' },
+        { value: 'partners.html', label: 'Partners' },
+        { value: 'our-team.html', label: 'Our Team' },
+        { value: 'feedback.html', label: 'Feedback' },
+        { value: SETTINGS_THEME_PAGE, label: 'Settings' },
+    ];
     const systemDark = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-    const applyTheme = (dark) => {
-        document.body.classList.toggle('dark', dark);
+    const normalizeThemeMode = value => value === '0' || value === '1' ? value : null;
+    const normalizeLightBg = value => value === 'white' ? 'white' : 'mint';
+    const normalizeDarkBg = value => value === 'black' ? 'black' : 'stone';
+    const normalizePageThemeAutomations = value => {
+        if (!value || typeof value !== 'object') return {};
+        const next = {};
+        Object.keys(value).forEach(key => {
+            const mode = value[key];
+            if (typeof key === 'string' && (mode === 'dark' || mode === 'light')) {
+                next[key] = mode;
+            }
+        });
+        return next;
     };
-
-    const updateToggleLabel = () => {
-        if (!themeToggle) return;
-        const stored = localStorage.getItem('dark-mode');
-        if (stored === null) {
-            themeToggle.textContent = '🌓';
-        } else if (stored === '1') {
-            themeToggle.textContent = '🌙';
-        } else {
-            themeToggle.textContent = '☀️';
+    const normalizeAccountSettings = value => {
+        const raw = value && typeof value === 'object' ? value : {};
+        return {
+            darkMode: normalizeThemeMode(raw.darkMode),
+            lightBg: normalizeLightBg(raw.lightBg),
+            darkBg: normalizeDarkBg(raw.darkBg),
+            pageThemeAutomations: normalizePageThemeAutomations(raw.pageThemeAutomations),
+        };
+    };
+    const readLegacySettings = () => normalizeAccountSettings({
+        darkMode: localStorage.getItem('dark-mode'),
+        lightBg: localStorage.getItem(LIGHT_BG_KEY),
+        darkBg: localStorage.getItem(DARK_BG_KEY),
+        pageThemeAutomations: (() => {
+            try {
+                return JSON.parse(localStorage.getItem(PAGE_THEME_AUTOMATIONS_KEY) || '{}');
+            } catch (e) {
+                return {};
+            }
+        })(),
+    });
+    const isAccountSessionActive = () => !!localStorage.getItem('jamex-password') && !!localStorage.getItem('jamex-username');
+    const getCachedAccountSettings = () => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(ACCOUNT_SETTINGS_KEY) || 'null');
+            return normalizeAccountSettings(parsed || readLegacySettings());
+        } catch (e) {
+            return readLegacySettings();
         }
     };
+    const cacheAccountSettings = settings => {
+        const normalized = normalizeAccountSettings(settings);
+        localStorage.setItem(ACCOUNT_SETTINGS_KEY, JSON.stringify(normalized));
+        if (normalized.darkMode === null) {
+            localStorage.removeItem('dark-mode');
+        } else {
+            localStorage.setItem('dark-mode', normalized.darkMode);
+        }
+        localStorage.setItem(LIGHT_BG_KEY, normalized.lightBg);
+        localStorage.setItem(DARK_BG_KEY, normalized.darkBg);
+        localStorage.setItem(PAGE_THEME_AUTOMATIONS_KEY, JSON.stringify(normalized.pageThemeAutomations));
+        return normalized;
+    };
+    const getActiveAccountSettings = () => isAccountSessionActive() ? getCachedAccountSettings() : readLegacySettings();
+    let remoteSettingsSyncAvailable = true;
 
-    if (themeToggle) {
-        themeToggle.addEventListener('click', () => {
-            const stored = localStorage.getItem('dark-mode');
-            if (stored === null) {
-                const newDark = !systemDark();
-                localStorage.setItem('dark-mode', newDark ? '1' : '0');
-                applyTheme(newDark);
-            } else if (stored === '1') {
-                localStorage.setItem('dark-mode', '0');
-                applyTheme(false);
-            } else {
-                localStorage.removeItem('dark-mode');
-                applyTheme(systemDark());
+    function queueAccountSettingsSync(settings) {
+        if (!isAccountSessionActive() || !remoteSettingsSyncAvailable) return Promise.resolve();
+        const username = localStorage.getItem('jamex-username');
+        if (!username) return Promise.resolve();
+        return sbFetch(
+            'accounts?username=eq.' + encodeURIComponent(username),
+            {
+                method: 'PATCH',
+                prefer: 'return=minimal',
+                body: JSON.stringify({ settings: normalizeAccountSettings(settings) }),
             }
-            updateToggleLabel();
+        ).catch(e => {
+            const message = e && e.message ? e.message : '';
+            if (/settings/i.test(message) && /column|schema/i.test(message)) {
+                remoteSettingsSyncAvailable = false;
+            }
+            console.warn('Could not sync account settings to Supabase:', e);
         });
     }
 
-    const storedTheme = localStorage.getItem('dark-mode');
-    if (storedTheme !== null) {
+    function persistAccountSettings(nextSettings) {
+        const normalized = cacheAccountSettings(nextSettings);
+        if (isAccountSessionActive()) queueAccountSettingsSync(normalized);
+        return normalized;
+    }
+
+    const getLightBackgroundPreference = () => {
+        return getActiveAccountSettings().lightBg;
+    };
+    const getDarkBackgroundPreference = () => {
+        return getActiveAccountSettings().darkBg;
+    };
+
+    const applyBackgroundPreferences = () => {
+        document.body.dataset.lightBg = getLightBackgroundPreference();
+        document.body.dataset.darkBg = getDarkBackgroundPreference();
+    };
+
+    const applyTheme = (dark) => {
+        applyBackgroundPreferences();
+        document.body.classList.toggle('dark', dark);
+    };
+
+    const getPageThemeAutomations = () => {
+        return getActiveAccountSettings().pageThemeAutomations;
+    };
+
+    const setPageThemeAutomations = automations => {
+        const currentSettings = getActiveAccountSettings();
+        persistAccountSettings({
+            ...currentSettings,
+            pageThemeAutomations: normalizePageThemeAutomations(automations),
+        });
+    };
+
+    const getAutomationThemeMode = pageKey => {
+        const automations = getPageThemeAutomations();
+        const mode = automations[pageKey];
+        return mode === 'dark' || mode === 'light' ? mode : null;
+    };
+
+    let activeThemePage = current;
+    let pageThemeAutomationMode = getAutomationThemeMode(activeThemePage);
+    let pageThemeAutomationSuppressed = false;
+
+    const setThemeAutomationContext = (pageKey, options) => {
+        activeThemePage = pageKey || current;
+        pageThemeAutomationMode = getAutomationThemeMode(activeThemePage);
+        if (!options || options.resetSuppression !== false) {
+            pageThemeAutomationSuppressed = false;
+        }
+        applyCurrentTheme();
+        updateToggleLabel();
+    };
+
+    const getEffectiveDarkState = () => {
+        if (pageThemeAutomationMode && !pageThemeAutomationSuppressed) {
+            return pageThemeAutomationMode === 'dark';
+        }
+        const stored = localStorage.getItem('dark-mode');
+        if (stored !== null) return stored === '1';
+        return systemDark();
+    };
+
+    const applyCurrentTheme = () => {
+        applyTheme(getEffectiveDarkState());
+    };
+
+    const cycleTheme = () => {
+        if (pageThemeAutomationMode && !pageThemeAutomationSuppressed) {
+            const currentDark = getEffectiveDarkState();
+            pageThemeAutomationSuppressed = true;
+            const nextDark = !currentDark;
+            persistAccountSettings({
+                ...getActiveAccountSettings(),
+                darkMode: nextDark ? '1' : '0',
+            });
+            applyTheme(nextDark);
+            updateToggleLabel();
+            return;
+        }
+        const stored = getActiveAccountSettings().darkMode;
+        if (stored === null) {
+            const newDark = !systemDark();
+            persistAccountSettings({
+                ...getActiveAccountSettings(),
+                darkMode: newDark ? '1' : '0',
+            });
+            applyTheme(newDark);
+        } else if (stored === '1') {
+            persistAccountSettings({
+                ...getActiveAccountSettings(),
+                darkMode: '0',
+            });
+            applyTheme(false);
+        } else {
+            persistAccountSettings({
+                ...getActiveAccountSettings(),
+                darkMode: null,
+            });
+            applyTheme(systemDark());
+        }
+        updateToggleLabel();
+    };
+
+    const updateToggleLabel = () => {
+        let label = '🌓';
+        if (pageThemeAutomationMode && !pageThemeAutomationSuppressed) {
+            label = getEffectiveDarkState() ? '🌙' : '☀️';
+        } else {
+            const stored = getActiveAccountSettings().darkMode;
+            if (stored === null) {
+                label = '🌓';
+            } else if (stored === '1') {
+                label = '🌙';
+            } else {
+                label = '☀️';
+            }
+        }
+        if (themeToggle) themeToggle.textContent = label;
+        document.querySelectorAll('.jx-settings-theme-toggle').forEach(btn => {
+            btn.textContent = label;
+        });
+    };
+
+    if (themeToggle) {
+        themeToggle.addEventListener('click', cycleTheme);
+    }
+
+    applyBackgroundPreferences();
+
+    const storedTheme = getActiveAccountSettings().darkMode;
+    if (pageThemeAutomationMode) {
+        applyCurrentTheme();
+    } else if (storedTheme !== null) {
         applyTheme(storedTheme === '1');
     } else {
         applyTheme(systemDark());
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            if (localStorage.getItem('dark-mode') === null) {
+            if (getActiveAccountSettings().darkMode === null && (!pageThemeAutomationMode || pageThemeAutomationSuppressed)) {
                 applyTheme(e.matches);
                 updateToggleLabel();
             }
@@ -152,7 +347,7 @@
                     if (/^(IFRAME|VIDEO|AUDIO|IMG|SCRIPT|STYLE)$/.test(p.nodeName)) {
                         return NodeFilter.FILTER_REJECT;
                     }
-                    if (p.classList && (p.classList.contains('tag') || p.classList.contains('visible-tags'))) {
+                    if (p.classList && (p.classList.contains('tag') || p.classList.contains('visible-tags') || p.classList.contains('tags'))) {
                         return NodeFilter.FILTER_REJECT;
                     }
                     p = p.parentNode;
@@ -325,7 +520,7 @@
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
     }
 
-    function cacheAccountRecord(username, password, email) {
+    function cacheAccountRecord(username, password, email, settings) {
         localStorage.setItem('jamex-accounts-cache-' + username, password);
         localStorage.setItem('jamex-password', password);
         localStorage.setItem('jamex-username', username);
@@ -333,6 +528,8 @@
             localStorage.setItem('jamex-email', email);
             localStorage.setItem('jamex-account-email-' + email, username);
         }
+        cacheAccountSettings(settings || getCachedAccountSettings());
+        setThemeAutomationContext(activeThemePage || current);
     }
 
     const JamexAccount = {
@@ -350,10 +547,23 @@
             const identRaw = String(identifier || '').trim();
             const ident = identRaw.includes('@') ? identRaw.toLowerCase() : identRaw;
             if (!ident) return null;
-            const rows = await sbFetch(
-                'accounts?or=(username.eq.' + encodeURIComponent(ident) + ',email.eq.' + encodeURIComponent(ident) + ')&select=username,password,email'
-            );
-            return rows && rows.length > 0 ? rows[0] : null;
+            try {
+                const rows = await sbFetch(
+                    'accounts?or=(username.eq.' + encodeURIComponent(ident) + ',email.eq.' + encodeURIComponent(ident) + ')&select=username,password,email,settings'
+                );
+                remoteSettingsSyncAvailable = true;
+                return rows && rows.length > 0 ? rows[0] : null;
+            } catch (e) {
+                const message = e && e.message ? e.message : '';
+                if (/settings/i.test(message) && /column|schema/i.test(message)) {
+                    remoteSettingsSyncAvailable = false;
+                    const fallbackRows = await sbFetch(
+                        'accounts?or=(username.eq.' + encodeURIComponent(ident) + ',email.eq.' + encodeURIComponent(ident) + ')&select=username,password,email'
+                    );
+                    return fallbackRows && fallbackRows.length > 0 ? fallbackRows[0] : null;
+                }
+                throw e;
+            }
         },
 
         findAccountByEmail: async (email) => {
@@ -384,19 +594,35 @@
                     if (existing.password !== pswd) {
                         return 'Incorrect password for that account.';
                     }
-                    cacheAccountRecord(existing.username, pswd, existing.email || null);
+                    cacheAccountRecord(existing.username, pswd, existing.email || null, existing.settings || null);
                     return null;
                 } else {
                     // New username — register in Supabase
                     if (!mail) return 'Enter an email to create a new account.';
                     const existingEmail = await JamexAccount.findAccountByEmail(mail);
                     if (existingEmail) return 'That email is already linked to another account.';
-                    await sbFetch('accounts', {
-                        method: 'POST',
-                        prefer: 'return=minimal',
-                    body: JSON.stringify({ username: identRaw, email: mail, password: pswd }),
-                });
-                    cacheAccountRecord(identRaw, pswd, mail);
+                    const initialSettings = readLegacySettings();
+                    try {
+                        await sbFetch('accounts', {
+                            method: 'POST',
+                            prefer: 'return=minimal',
+                            body: JSON.stringify({ username: identRaw, email: mail, password: pswd, settings: initialSettings }),
+                        });
+                        remoteSettingsSyncAvailable = true;
+                    } catch (e) {
+                        const message = e && e.message ? e.message : '';
+                        if (/settings/i.test(message) && /column|schema/i.test(message)) {
+                            remoteSettingsSyncAvailable = false;
+                            await sbFetch('accounts', {
+                                method: 'POST',
+                                prefer: 'return=minimal',
+                                body: JSON.stringify({ username: identRaw, email: mail, password: pswd }),
+                            });
+                        } else {
+                            throw e;
+                        }
+                    }
+                    cacheAccountRecord(identRaw, pswd, mail, initialSettings);
                 }
             } catch (e) {
                 console.warn('Supabase account check failed, falling back to local:', e);
@@ -406,11 +632,11 @@
                 const cached = localStorage.getItem('jamex-accounts-cache-' + cacheKey);
                 if (cached !== null) {
                     if (cached !== pswd) return 'Incorrect password for that account.';
-                    cacheAccountRecord(cacheKey, pswd, mail || localStorage.getItem('jamex-email'));
+                    cacheAccountRecord(cacheKey, pswd, mail || localStorage.getItem('jamex-email'), getCachedAccountSettings());
                     return null;
                 }
                 if (!mail) return 'Enter an email to create a new account.';
-                cacheAccountRecord(identRaw, pswd, mail);
+                cacheAccountRecord(identRaw, pswd, mail, readLegacySettings());
             }
 
             return null; // success
@@ -426,7 +652,7 @@
                     body: JSON.stringify({ password: newPassword }),
                 }
             );
-            cacheAccountRecord(username, newPassword, email || localStorage.getItem('jamex-email'));
+            cacheAccountRecord(username, newPassword, email || localStorage.getItem('jamex-email'), getCachedAccountSettings());
         },
 
         updatePasswordByEmail: async (email, newPassword) => {
@@ -441,7 +667,7 @@
                     body: JSON.stringify({ password: newPassword }),
                 }
             );
-            cacheAccountRecord(account.username, newPassword, cleanEmail);
+            cacheAccountRecord(account.username, newPassword, cleanEmail, getCachedAccountSettings());
         },
 
         updateEmail: async (username, email) => {
@@ -459,13 +685,14 @@
                     body: JSON.stringify({ email: cleanEmail }),
                 }
             );
-            cacheAccountRecord(username, JamexAccount.getpassword() || '', cleanEmail);
+            cacheAccountRecord(username, JamexAccount.getpassword() || '', cleanEmail, getCachedAccountSettings());
         },
 
         logout: () => {
             localStorage.removeItem('jamex-password');
             localStorage.removeItem('jamex-username');
             localStorage.removeItem('jamex-email');
+            setThemeAutomationContext(current);
         },
     };
     window.JamexAccount = JamexAccount;
@@ -496,6 +723,25 @@
         window._refreshAccountBtn = refreshAccountBtn;
 
         btn.addEventListener('click', () => openAccountModal(refreshAccountBtn));
+
+        const toggle = header.querySelector('#theme-toggle');
+        if (toggle) {
+            header.insertBefore(btn, toggle);
+        } else {
+            header.appendChild(btn);
+        }
+    })();
+
+    (function injectSettingsButton() {
+        const header = document.querySelector('header');
+        if (!header) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'settings-btn';
+        btn.type = 'button';
+        btn.textContent = String.fromCodePoint(0x2699, 0xFE0F);
+        btn.setAttribute('aria-label', 'Settings');
+        btn.addEventListener('click', openSettingsModal);
 
         const toggle = header.querySelector('#theme-toggle');
         if (toggle) {
@@ -542,15 +788,13 @@
                     statBtn.textContent = String.fromCodePoint(0x1F4CA) + ' My activity';
                     statBtn.addEventListener('click', () => renderView('activity'));
 
-                    const resetBtn = document.createElement('button');
-                    resetBtn.className = 'jx-btn jx-btn--secondary jx-profile-row-btn';
-                    resetBtn.textContent = String.fromCodePoint(0x1F512) + ' Reset password';
-                    resetBtn.addEventListener('click', () => renderView('reset'));
-
-                    const emailBtn = document.createElement('button');
-                    emailBtn.className = 'jx-btn jx-btn--secondary jx-profile-row-btn';
-                    emailBtn.textContent = (emailValue ? String.fromCodePoint(0x2709, 0xFE0F) + ' Change email' : String.fromCodePoint(0x2709, 0xFE0F) + ' Add email');
-                    emailBtn.addEventListener('click', () => renderView('email'));
+                    const settingsBtn = document.createElement('button');
+                    settingsBtn.className = 'jx-btn jx-btn--secondary jx-profile-row-btn';
+                    settingsBtn.textContent = String.fromCodePoint(0x2699, 0xFE0F) + ' Account settings';
+                    settingsBtn.addEventListener('click', () => {
+                        closeModal(overlay);
+                        openSettingsModal('account');
+                    });
 
                     const emailNote = document.createElement('p');
                     emailNote.className = 'jx-modal-hint jx-modal-hint--center';
@@ -577,8 +821,7 @@
                     closeBtn.addEventListener('click', () => closeModal(overlay));
 
                     box.appendChild(statBtn);
-                    box.appendChild(resetBtn);
-                    box.appendChild(emailBtn);
+                    box.appendChild(settingsBtn);
                     box.appendChild(emailNote);
                     actions.appendChild(logoutBtn);
                     actions.appendChild(closeBtn);
@@ -1207,9 +1450,779 @@
 
     function closeModal(overlay) {
         if (!overlay || overlay.dataset.closing === 'true') return;
+        if (overlay.id === 'jamex-settings-modal' && overlay.dataset.dirty === 'true' && overlay.dataset.allowClose !== 'true') {
+            openConfirmModal(
+                'Discard changes?',
+                'Exit without saving your settings changes?',
+                () => {
+                    if (typeof overlay._discardDraft === 'function') overlay._discardDraft();
+                }
+            );
+            return;
+        }
         overlay.dataset.closing = 'true';
         overlay.classList.add('jx-modal-closing');
+        if (overlay.id === 'jamex-settings-modal') {
+            setThemeAutomationContext(current);
+        }
         setTimeout(() => overlay.remove(), 200);
+    }
+
+    function openConfirmModal(titleText, bodyText, onConfirm) {
+        const existing = document.getElementById('jamex-confirm-modal');
+        if (existing) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'jamex-confirm-modal';
+        overlay.className = 'jx-modal-overlay';
+        overlay.dataset.closing = 'false';
+
+        const box = document.createElement('div');
+        box.className = 'jx-modal-box';
+
+        const title = document.createElement('h2');
+        title.className = 'jx-modal-title';
+        title.textContent = titleText;
+
+        const body = document.createElement('p');
+        body.className = 'jx-modal-sub';
+        body.textContent = bodyText;
+
+        const actions = document.createElement('div');
+        actions.className = 'jx-modal-actions';
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.className = 'jx-btn jx-btn--primary';
+        confirmBtn.type = 'button';
+        confirmBtn.textContent = 'Exit without saving';
+        confirmBtn.addEventListener('click', () => {
+            closeModal(overlay);
+            if (onConfirm) onConfirm();
+        });
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'jx-btn jx-btn--secondary';
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', () => closeModal(overlay));
+
+        actions.appendChild(confirmBtn);
+        actions.appendChild(cancelBtn);
+        box.appendChild(title);
+        box.appendChild(body);
+        box.appendChild(actions);
+
+        overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(overlay); });
+
+        function escHandler(e) {
+            if (e.key === 'Escape') {
+                closeModal(overlay);
+                document.removeEventListener('keydown', escHandler);
+            }
+        }
+        document.addEventListener('keydown', escHandler);
+
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+    }
+
+    async function refreshSignedInAccountSettings() {
+        if (document.getElementById('jamex-settings-modal')) return;
+        if (!JamexAccount.isLoggedIn()) return;
+        const username = JamexAccount.getusername();
+        const password = JamexAccount.getpassword();
+        if (!username || !password) return;
+        try {
+            const account = await JamexAccount.findAccountByIdentifier(username);
+            if (!account || account.password !== password) return;
+            cacheAccountRecord(account.username, password, account.email || null, account.settings || null);
+        } catch (e) {
+            console.warn('Could not refresh signed-in account settings:', e);
+        }
+    }
+
+    function buildLabeledInput(id, labelText, type, placeholder, autocomplete) {
+        const label = document.createElement('label');
+        label.className = 'jx-modal-label';
+        label.setAttribute('for', id);
+        label.textContent = labelText;
+
+        const input = document.createElement('input');
+        input.id = id;
+        input.className = 'jx-modal-input';
+        input.type = type;
+        input.placeholder = placeholder;
+        if (autocomplete) input.autocomplete = autocomplete;
+        if (type === 'password') input.maxLength = 30;
+        if (type === 'email') input.maxLength = 120;
+
+        return { label, input };
+    }
+
+    function buildReadout() {
+        const el = document.createElement('p');
+        el.className = 'jx-modal-readout';
+        el.style.display = 'none';
+        return el;
+    }
+
+    async function getCurrentAccountRecord() {
+        const username = JamexAccount.getusername();
+        if (!username) return null;
+        try {
+            return await JamexAccount.findAccountByIdentifier(username);
+        } catch (e) {
+            return {
+                username: username,
+                password: JamexAccount.getpassword(),
+                email: JamexAccount.getemail(),
+            };
+        }
+    }
+
+    function openSettingsModal(initialTab) {
+        const existing = document.getElementById('jamex-settings-modal');
+        if (existing) {
+            if (existing.dataset.closing !== 'true') {
+                const requestedTab = initialTab || existing.dataset.activeTab || 'appearance';
+                const requestedButton = existing.querySelector('.jx-settings-tab[data-tab-id="' + requestedTab + '"]');
+                if (requestedButton) requestedButton.click();
+                const firstInput = existing.querySelector('.jx-settings-back, .jx-settings-tab, .jx-modal-input, input[type="radio"]');
+                if (firstInput) firstInput.focus();
+            }
+            return;
+        }
+
+        const accountModal = document.getElementById('jamex-account-modal');
+        if (accountModal) closeModal(accountModal);
+
+        const overlay = document.createElement('div');
+        overlay.id = 'jamex-settings-modal';
+        overlay.className = 'jx-modal-overlay jx-settings-overlay';
+        overlay.dataset.closing = 'false';
+
+        const originalSettings = normalizeAccountSettings(getActiveAccountSettings());
+        let draftSettings = normalizeAccountSettings(originalSettings);
+        let draftThemeAutomationSuppressed = false;
+
+        function areSettingsEqual(a, b) {
+            return JSON.stringify(normalizeAccountSettings(a)) === JSON.stringify(normalizeAccountSettings(b));
+        }
+
+        function getDraftEffectiveDarkState() {
+            const settingsAutomationMode = draftSettings.pageThemeAutomations[SETTINGS_THEME_PAGE];
+            if ((settingsAutomationMode === 'dark' || settingsAutomationMode === 'light') && !draftThemeAutomationSuppressed) {
+                return settingsAutomationMode === 'dark';
+            }
+            if (draftSettings.darkMode !== null) return draftSettings.darkMode === '1';
+            return systemDark();
+        }
+
+        function applyDraftSettings() {
+            cacheAccountSettings(draftSettings);
+            setThemeAutomationContext(SETTINGS_THEME_PAGE, { resetSuppression: false });
+            pageThemeAutomationSuppressed = draftThemeAutomationSuppressed;
+            applyTheme(getDraftEffectiveDarkState());
+            updateToggleLabel();
+        }
+
+        function revertDraftSettings() {
+            draftSettings = normalizeAccountSettings(originalSettings);
+            draftThemeAutomationSuppressed = false;
+            cacheAccountSettings(originalSettings);
+            setThemeAutomationContext(current);
+        }
+
+        overlay._discardDraft = () => {
+            revertDraftSettings();
+            overlay.dataset.allowClose = 'true';
+            closeModal(overlay);
+        };
+
+        function saveDraftSettings() {
+            persistAccountSettings(draftSettings);
+            draftThemeAutomationSuppressed = false;
+            overlay.dataset.allowClose = 'true';
+            closeModal(overlay);
+        }
+
+        setThemeAutomationContext(SETTINGS_THEME_PAGE);
+        applyDraftSettings();
+
+        const page = document.createElement('div');
+        page.className = 'jx-settings-page';
+
+        const topbar = document.createElement('div');
+        topbar.className = 'jx-settings-topbar';
+
+        const topbarMain = document.createElement('div');
+        topbarMain.className = 'jx-settings-topbar-main';
+
+        const backBtn = document.createElement('button');
+        backBtn.className = 'jx-btn jx-btn--secondary jx-settings-back';
+        backBtn.type = 'button';
+        backBtn.textContent = String.fromCodePoint(0x21A9, 0xFE0F) + ' Back';
+        backBtn.addEventListener('click', () => closeModal(overlay));
+
+        const dirtyActions = document.createElement('div');
+        dirtyActions.className = 'jx-settings-dirty-actions';
+        dirtyActions.style.display = 'none';
+
+        const saveExitBtn = document.createElement('button');
+        saveExitBtn.className = 'jx-btn jx-btn--secondary';
+        saveExitBtn.type = 'button';
+        saveExitBtn.textContent = String.fromCodePoint(0x1F4BE) + ' Save and exit';
+        saveExitBtn.addEventListener('click', saveDraftSettings);
+
+        const exitWithoutSavingBtn = document.createElement('button');
+        exitWithoutSavingBtn.className = 'jx-btn jx-btn--danger';
+        exitWithoutSavingBtn.type = 'button';
+        exitWithoutSavingBtn.textContent = String.fromCodePoint(0x21A9, 0xFE0F) + ' Exit without saving';
+        exitWithoutSavingBtn.addEventListener('click', () => {
+            openConfirmModal(
+                'Discard changes?',
+                'Exit without saving your settings changes?',
+                () => overlay._discardDraft()
+            );
+        });
+
+        dirtyActions.appendChild(saveExitBtn);
+        dirtyActions.appendChild(exitWithoutSavingBtn);
+
+        const settingsThemeBtn = document.createElement('button');
+        settingsThemeBtn.className = 'jx-settings-theme-toggle';
+        settingsThemeBtn.type = 'button';
+        settingsThemeBtn.setAttribute('aria-label', 'Toggle theme');
+        settingsThemeBtn.addEventListener('click', () => {
+            const settingsAutomationMode = draftSettings.pageThemeAutomations[SETTINGS_THEME_PAGE];
+            const currentDark = getDraftEffectiveDarkState();
+            draftThemeAutomationSuppressed = !!(settingsAutomationMode && !draftThemeAutomationSuppressed) || draftThemeAutomationSuppressed;
+            draftSettings.darkMode = currentDark ? '0' : '1';
+            applyDraftSettings();
+            updateDirtyState();
+        });
+
+        const hero = document.createElement('div');
+        hero.className = 'jx-settings-hero';
+
+        const title = document.createElement('h2');
+        title.className = 'jx-modal-title';
+        title.textContent = String.fromCodePoint(0x2699, 0xFE0F) + ' Settings';
+
+        const sub = document.createElement('p');
+        sub.className = 'jx-modal-sub';
+        sub.textContent = 'Customise your account and the look and feel of the website';
+
+        topbarMain.appendChild(backBtn);
+        topbarMain.appendChild(dirtyActions);
+        hero.appendChild(title);
+        hero.appendChild(sub);
+        topbarMain.appendChild(hero);
+        topbar.appendChild(topbarMain);
+        topbar.appendChild(settingsThemeBtn);
+
+        const layout = document.createElement('div');
+        layout.className = 'jx-settings-layout';
+
+        const sidebar = document.createElement('aside');
+        sidebar.className = 'jx-settings-sidebar';
+
+        const content = document.createElement('div');
+        content.className = 'jx-settings-content';
+
+        const panels = {};
+        const tabs = {};
+
+        function updateDirtyState() {
+            const dirty = !areSettingsEqual(draftSettings, originalSettings);
+            overlay.dataset.dirty = dirty ? 'true' : 'false';
+            if (!dirty) overlay.dataset.allowClose = 'false';
+            backBtn.style.display = dirty ? 'none' : '';
+            dirtyActions.style.display = dirty ? '' : 'none';
+        }
+
+        function activateTab(tabId) {
+            overlay.dataset.activeTab = tabId;
+            Object.keys(panels).forEach(key => {
+                const active = key === tabId;
+                panels[key].hidden = !active;
+                tabs[key].classList.toggle('jx-settings-tab--active', active);
+                tabs[key].setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+        }
+
+        function createTab(tabId, label) {
+            const btn = document.createElement('button');
+            btn.className = 'jx-settings-tab';
+            btn.type = 'button';
+            btn.textContent = label;
+            btn.dataset.tabId = tabId;
+            btn.setAttribute('role', 'tab');
+            btn.setAttribute('aria-selected', 'false');
+            btn.addEventListener('click', () => activateTab(tabId));
+            tabs[tabId] = btn;
+            sidebar.appendChild(btn);
+        }
+
+        function createPanel(tabId, headingText, hintText) {
+            const panel = document.createElement('section');
+            panel.className = 'jx-settings-panel';
+            panel.setAttribute('role', 'tabpanel');
+            panel.hidden = true;
+
+            const heading = document.createElement('h3');
+            heading.className = 'jx-settings-heading';
+            heading.textContent = headingText;
+
+            const hint = document.createElement('p');
+            hint.className = 'jx-modal-hint';
+            hint.textContent = hintText;
+
+            panel.appendChild(heading);
+            panel.appendChild(hint);
+            panels[tabId] = panel;
+            content.appendChild(panel);
+            return panel;
+        }
+
+        createTab('account', String.fromCodePoint(0x1F464) + ' Account');
+        createTab('appearance', String.fromCodePoint(0x1F3A8) + ' Appearance');
+        createTab('automations', String.fromCodePoint(0x1F916) + ' Automations');
+
+        const accountSection = createPanel('account', 'Account settings', 'Update and reveal your saved account details from one place.');
+
+        if (JamexAccount.isLoggedIn()) {
+            const accountHint = document.createElement('p');
+            accountHint.className = 'jx-modal-hint';
+            accountHint.textContent = 'Signed in as ' + JamexAccount.getusername() + '.';
+            accountSection.appendChild(accountHint);
+
+            const resetCard = document.createElement('div');
+            resetCard.className = 'jx-settings-card';
+            const resetTitle = document.createElement('h4');
+            resetTitle.className = 'jx-settings-card-title';
+            resetTitle.textContent = 'Reset your password';
+            const resetHint = document.createElement('p');
+            resetHint.className = 'jx-modal-hint';
+            resetHint.textContent = 'Enter your current password, then your new password twice.';
+            const resetError = document.createElement('p');
+            resetError.className = 'jx-modal-error';
+            resetError.style.display = 'none';
+            const resetSuccess = document.createElement('p');
+            resetSuccess.className = 'jx-modal-success';
+            resetSuccess.style.display = 'none';
+            const currentPasswordField = buildLabeledInput('jx-settings-current-password', 'Current password', 'password', 'Enter current password...', 'current-password');
+            const newPasswordField = buildLabeledInput('jx-settings-new-password', 'Enter new password', 'password', 'Choose a new password...', 'new-password');
+            const confirmPasswordField = buildLabeledInput('jx-settings-confirm-password', 'Confirm new password', 'password', 'Confirm your new password...', 'new-password');
+            const resetActions = document.createElement('div');
+            resetActions.className = 'jx-modal-actions';
+            const resetBtn = document.createElement('button');
+            resetBtn.className = 'jx-btn jx-btn--primary';
+            resetBtn.type = 'button';
+            resetBtn.textContent = 'Update password';
+            let isResettingPassword = false;
+            resetBtn.addEventListener('click', async () => {
+                if (isResettingPassword) return;
+                resetError.style.display = 'none';
+                resetSuccess.style.display = 'none';
+                const currentPassword = currentPasswordField.input.value.trim();
+                const newPassword = newPasswordField.input.value.trim();
+                const confirmPassword = confirmPasswordField.input.value.trim();
+                if (!currentPassword || !newPassword || !confirmPassword) {
+                    resetError.textContent = 'All three password fields are required.';
+                    resetError.style.display = '';
+                    return;
+                }
+                if (newPassword.length > 30) {
+                    resetError.textContent = 'New password must be 30 characters or fewer.';
+                    resetError.style.display = '';
+                    return;
+                }
+                if (newPassword !== confirmPassword) {
+                    resetError.textContent = 'The new passwords do not match.';
+                    resetError.style.display = '';
+                    return;
+                }
+                isResettingPassword = true;
+                resetBtn.disabled = true;
+                resetBtn.textContent = 'Updating...';
+                try {
+                    const account = await getCurrentAccountRecord();
+                    if (!account || account.password !== currentPassword) {
+                        resetError.textContent = 'Current password is incorrect.';
+                        resetError.style.display = '';
+                    } else {
+                        await JamexAccount.updatePassword(account.username, newPassword, account.email || JamexAccount.getemail());
+                        resetSuccess.textContent = 'Password updated successfully.';
+                        resetSuccess.style.display = '';
+                        currentPasswordField.input.value = '';
+                        newPasswordField.input.value = '';
+                        confirmPasswordField.input.value = '';
+                    }
+                } catch (e) {
+                    resetError.textContent = 'Could not update your password right now.';
+                    resetError.style.display = '';
+                }
+                resetBtn.disabled = false;
+                resetBtn.textContent = 'Update password';
+                isResettingPassword = false;
+            });
+            resetActions.appendChild(resetBtn);
+            [
+                resetTitle,
+                resetHint,
+                currentPasswordField.label,
+                currentPasswordField.input,
+                newPasswordField.label,
+                newPasswordField.input,
+                confirmPasswordField.label,
+                confirmPasswordField.input,
+                resetError,
+                resetSuccess,
+                resetActions,
+            ].forEach(node => resetCard.appendChild(node));
+
+            const viewPasswordCard = document.createElement('div');
+            viewPasswordCard.className = 'jx-settings-card';
+            const viewPasswordTitle = document.createElement('h4');
+            viewPasswordTitle.className = 'jx-settings-card-title';
+            viewPasswordTitle.textContent = 'View your password';
+            const viewPasswordHint = document.createElement('p');
+            viewPasswordHint.className = 'jx-modal-hint';
+            viewPasswordHint.textContent = 'Enter the recovery email linked to this account to reveal the current password.';
+            const viewPasswordError = document.createElement('p');
+            viewPasswordError.className = 'jx-modal-error';
+            viewPasswordError.style.display = 'none';
+            const viewPasswordReadout = buildReadout();
+            const passwordEmailField = buildLabeledInput('jx-settings-password-email', 'Recovery email', 'email', 'Enter your linked email...', 'email');
+            const viewPasswordActions = document.createElement('div');
+            viewPasswordActions.className = 'jx-modal-actions';
+            const viewPasswordBtn = document.createElement('button');
+            viewPasswordBtn.className = 'jx-btn jx-btn--secondary';
+            viewPasswordBtn.type = 'button';
+            viewPasswordBtn.textContent = 'Show password';
+            viewPasswordBtn.addEventListener('click', async () => {
+                viewPasswordError.style.display = 'none';
+                viewPasswordReadout.style.display = 'none';
+                const enteredEmail = passwordEmailField.input.value.trim().toLowerCase();
+                if (!JamexAccount.isValidEmail(enteredEmail)) {
+                    viewPasswordError.textContent = 'Enter a valid email address.';
+                    viewPasswordError.style.display = '';
+                    return;
+                }
+                try {
+                    const account = await getCurrentAccountRecord();
+                    if (!account || !account.email || account.email.toLowerCase() !== enteredEmail) {
+                        viewPasswordError.textContent = 'That email does not match this account.';
+                        viewPasswordError.style.display = '';
+                        return;
+                    }
+                    viewPasswordReadout.textContent = 'Current password: ' + (account.password || JamexAccount.getpassword() || 'Not available');
+                    viewPasswordReadout.style.display = '';
+                } catch (e) {
+                    viewPasswordError.textContent = 'Could not verify that email right now.';
+                    viewPasswordError.style.display = '';
+                }
+            });
+            viewPasswordActions.appendChild(viewPasswordBtn);
+            [
+                viewPasswordTitle,
+                viewPasswordHint,
+                passwordEmailField.label,
+                passwordEmailField.input,
+                viewPasswordError,
+                viewPasswordReadout,
+                viewPasswordActions,
+            ].forEach(node => viewPasswordCard.appendChild(node));
+
+            const viewEmailCard = document.createElement('div');
+            viewEmailCard.className = 'jx-settings-card';
+            const viewEmailTitle = document.createElement('h4');
+            viewEmailTitle.className = 'jx-settings-card-title';
+            viewEmailTitle.textContent = 'View your email';
+            const viewEmailHint = document.createElement('p');
+            viewEmailHint.className = 'jx-modal-hint';
+            viewEmailHint.textContent = 'Enter your current password to reveal the recovery email on file.';
+            const viewEmailError = document.createElement('p');
+            viewEmailError.className = 'jx-modal-error';
+            viewEmailError.style.display = 'none';
+            const viewEmailReadout = buildReadout();
+            const emailPasswordField = buildLabeledInput('jx-settings-email-password', 'Current password', 'password', 'Enter your password...', 'current-password');
+            const viewEmailActions = document.createElement('div');
+            viewEmailActions.className = 'jx-modal-actions';
+            const viewEmailBtn = document.createElement('button');
+            viewEmailBtn.className = 'jx-btn jx-btn--secondary';
+            viewEmailBtn.type = 'button';
+            viewEmailBtn.textContent = 'Show email';
+            viewEmailBtn.addEventListener('click', async () => {
+                viewEmailError.style.display = 'none';
+                viewEmailReadout.style.display = 'none';
+                const enteredPassword = emailPasswordField.input.value.trim();
+                if (!enteredPassword) {
+                    viewEmailError.textContent = 'Enter your current password.';
+                    viewEmailError.style.display = '';
+                    return;
+                }
+                try {
+                    const account = await getCurrentAccountRecord();
+                    if (!account || account.password !== enteredPassword) {
+                        viewEmailError.textContent = 'That password is incorrect.';
+                        viewEmailError.style.display = '';
+                        return;
+                    }
+                    viewEmailReadout.textContent = account.email
+                        ? ('Recovery email: ' + account.email)
+                        : 'No recovery email is linked to this account yet.';
+                    viewEmailReadout.style.display = '';
+                } catch (e) {
+                    viewEmailError.textContent = 'Could not verify that password right now.';
+                    viewEmailError.style.display = '';
+                }
+            });
+            viewEmailActions.appendChild(viewEmailBtn);
+            [
+                viewEmailTitle,
+                viewEmailHint,
+                emailPasswordField.label,
+                emailPasswordField.input,
+                viewEmailError,
+                viewEmailReadout,
+                viewEmailActions,
+            ].forEach(node => viewEmailCard.appendChild(node));
+
+            accountSection.appendChild(resetCard);
+            accountSection.appendChild(viewPasswordCard);
+            accountSection.appendChild(viewEmailCard);
+        } else {
+            const signedOutCard = document.createElement('div');
+            signedOutCard.className = 'jx-settings-card';
+            const signedOutText = document.createElement('p');
+            signedOutText.className = 'jx-modal-hint';
+            signedOutText.textContent = 'Sign in with your Jamex Account to use password and email settings.';
+            const signedOutActions = document.createElement('div');
+            signedOutActions.className = 'jx-modal-actions';
+            const signInBtn = document.createElement('button');
+            signInBtn.className = 'jx-btn jx-btn--primary';
+            signInBtn.type = 'button';
+            signInBtn.textContent = 'Open sign in';
+            signInBtn.addEventListener('click', () => {
+                closeModal(overlay);
+                openAccountModal(window._refreshAccountBtn);
+            });
+            signedOutActions.appendChild(signInBtn);
+            signedOutCard.appendChild(signedOutText);
+            signedOutCard.appendChild(signedOutActions);
+            accountSection.appendChild(signedOutCard);
+        }
+
+        const appearanceSection = createPanel('appearance', 'Website background customisation', 'Pick a look for light mode and dark mode separately.');
+
+        function createBackgroundCard(groupName, titleText, storageKey, options) {
+            const card = document.createElement('div');
+            card.className = 'jx-settings-card';
+            const heading = document.createElement('h4');
+            heading.className = 'jx-settings-card-title';
+            heading.textContent = titleText;
+            const group = document.createElement('div');
+            group.className = 'jx-settings-choice-grid';
+            const currentValue = storageKey === LIGHT_BG_KEY ? draftSettings.lightBg : draftSettings.darkBg;
+
+            options.items.forEach(option => {
+                const label = document.createElement('label');
+                label.className = 'jx-settings-swatch-option';
+                const input = document.createElement('input');
+                input.type = 'radio';
+                input.name = groupName;
+                input.value = option.value;
+                input.checked = currentValue === option.value;
+                input.addEventListener('change', () => {
+                    draftSettings = normalizeAccountSettings({
+                        ...draftSettings,
+                        [storageKey === LIGHT_BG_KEY ? 'lightBg' : 'darkBg']: option.value,
+                    });
+                    applyDraftSettings();
+                    updateDirtyState();
+                });
+                const swatch = document.createElement('span');
+                swatch.className = 'jx-settings-swatch';
+                swatch.style.backgroundColor = option.swatch;
+                if (option.borderColor) swatch.style.borderColor = option.borderColor;
+                const textWrap = document.createElement('div');
+                const strong = document.createElement('strong');
+                strong.textContent = option.label;
+                const span = document.createElement('span');
+                span.textContent = option.description;
+                textWrap.appendChild(strong);
+                textWrap.appendChild(span);
+                label.appendChild(input);
+                label.appendChild(swatch);
+                label.appendChild(textWrap);
+                group.appendChild(label);
+            });
+
+            card.appendChild(heading);
+            card.appendChild(group);
+            return card;
+        }
+
+        appearanceSection.appendChild(createBackgroundCard('jx-light-background', 'Light mode background', LIGHT_BG_KEY, {
+            defaultValue: 'mint',
+            items: [
+                { value: 'mint', label: 'Minty Green', description: 'Default', swatch: '#ebfff4', borderColor: '#9ed6b6' },
+                { value: 'white', label: 'Pure White', description: '', swatch: '#ffffff', borderColor: '#cfcfcf' },
+            ],
+        }));
+        appearanceSection.appendChild(createBackgroundCard('jx-dark-background', 'Dark mode background', DARK_BG_KEY, {
+            defaultValue: 'stone',
+            items: [
+                { value: 'stone', label: 'Stone Grey', description: 'Default', swatch: '#363636', borderColor: '#707070' },
+                { value: 'black', label: 'Super Black', description: '', swatch: '#000000', borderColor: '#555555' },
+            ],
+        }));
+
+        const automationsSection = createPanel('automations', 'Theme automations', 'Automatically open specific pages in a chosen theme. You can still switch manually after the page loads.');
+
+        const automationCard = document.createElement('div');
+        automationCard.className = 'jx-settings-card';
+        const automationTitle = document.createElement('h4');
+        automationTitle.className = 'jx-settings-card-title';
+        automationTitle.textContent = 'Page theme rules';
+        const automationHint = document.createElement('p');
+        automationHint.className = 'jx-modal-hint';
+        automationHint.textContent = 'Create one or more rules like "Open Games in dark mode".';
+        const automationList = document.createElement('div');
+        automationList.className = 'jx-settings-automation-list';
+        const automationEmpty = document.createElement('p');
+        automationEmpty.className = 'jx-modal-hint';
+        automationEmpty.textContent = 'No page theme automations yet.';
+        const automationActions = document.createElement('div');
+        automationActions.className = 'jx-modal-actions';
+        const addAutomationBtn = document.createElement('button');
+        addAutomationBtn.className = 'jx-btn jx-btn--secondary';
+        addAutomationBtn.type = 'button';
+        addAutomationBtn.textContent = 'Add automation';
+
+        const createAutomationSelect = (items, value) => {
+            const select = document.createElement('select');
+            select.className = 'jx-settings-automation-select';
+            items.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item.value;
+                option.textContent = item.label;
+                if (item.value === value) option.selected = true;
+                select.appendChild(option);
+            });
+            return select;
+        };
+
+        const syncPageAutomationState = () => {
+            const nextAutomations = {};
+            automationList.querySelectorAll('.jx-settings-automation-row').forEach(row => {
+                const pageValue = row.querySelector('[data-role="page"]').value;
+                const themeValue = row.querySelector('[data-role="theme"]').value;
+                if (pageValue && (themeValue === 'dark' || themeValue === 'light')) {
+                    nextAutomations[pageValue] = themeValue;
+                }
+            });
+            draftSettings = normalizeAccountSettings({
+                ...draftSettings,
+                pageThemeAutomations: nextAutomations,
+            });
+            if (!draftSettings.pageThemeAutomations[SETTINGS_THEME_PAGE]) {
+                draftThemeAutomationSuppressed = false;
+            }
+            applyDraftSettings();
+            automationEmpty.style.display = automationList.children.length ? 'none' : '';
+            updateDirtyState();
+        };
+
+        const addAutomationRow = (pageValue, themeValue) => {
+            const row = document.createElement('div');
+            row.className = 'jx-settings-automation-row';
+
+            const openLabel = document.createElement('span');
+            openLabel.className = 'jx-settings-automation-copy';
+            openLabel.textContent = 'Open';
+
+            const pageSelect = createAutomationSelect(PAGE_THEME_AUTOMATION_PAGES, pageValue || 'games.html');
+            pageSelect.dataset.role = 'page';
+
+            const inLabel = document.createElement('span');
+            inLabel.className = 'jx-settings-automation-copy';
+            inLabel.textContent = 'in';
+
+            const themeSelect = createAutomationSelect([
+                { value: 'light', label: 'light mode' },
+                { value: 'dark', label: 'dark mode' },
+            ], themeValue || 'dark');
+            themeSelect.dataset.role = 'theme';
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'jx-btn jx-btn--secondary jx-settings-automation-remove';
+            removeBtn.type = 'button';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', () => {
+                row.remove();
+                syncPageAutomationState();
+            });
+
+            pageSelect.addEventListener('change', syncPageAutomationState);
+            themeSelect.addEventListener('change', syncPageAutomationState);
+
+            row.appendChild(openLabel);
+            row.appendChild(pageSelect);
+            row.appendChild(inLabel);
+            row.appendChild(themeSelect);
+            row.appendChild(removeBtn);
+            automationList.appendChild(row);
+            syncPageAutomationState();
+        };
+
+        addAutomationBtn.addEventListener('click', () => addAutomationRow());
+
+        const savedAutomations = draftSettings.pageThemeAutomations;
+        const savedAutomationEntries = Object.entries(savedAutomations)
+            .filter(entry => entry[1] === 'dark' || entry[1] === 'light');
+
+        if (savedAutomationEntries.length) {
+            savedAutomationEntries.forEach(([pageValue, themeValue]) => addAutomationRow(pageValue, themeValue));
+        } else {
+            syncPageAutomationState();
+        }
+
+        automationActions.appendChild(addAutomationBtn);
+        automationCard.appendChild(automationTitle);
+        automationCard.appendChild(automationHint);
+        automationCard.appendChild(automationList);
+        automationCard.appendChild(automationEmpty);
+        automationCard.appendChild(automationActions);
+        automationsSection.appendChild(automationCard);
+
+        updateToggleLabel();
+        settingsThemeBtn.textContent = themeToggle ? themeToggle.textContent : '🌓';
+        updateDirtyState();
+
+        activateTab(initialTab || 'appearance');
+
+        layout.appendChild(sidebar);
+        layout.appendChild(content);
+        page.appendChild(topbar);
+        page.appendChild(layout);
+
+        function escHandler(e) {
+            if (e.key === 'Escape') {
+                closeModal(overlay);
+                document.removeEventListener('keydown', escHandler);
+            }
+        }
+        document.addEventListener('keydown', escHandler);
+
+        overlay.appendChild(page);
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => {
+            const firstFocusable = page.querySelector('.jx-settings-back, .jx-settings-tab, .jx-modal-input, input[type="radio"], .jx-btn');
+            if (firstFocusable) firstFocusable.focus();
+        });
     }
 
     // =========================================================================
@@ -1247,6 +2260,12 @@
         }
         return res.json();
     }
+
+    refreshSignedInAccountSettings();
+    window.addEventListener('focus', refreshSignedInAccountSettings);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') refreshSignedInAccountSettings();
+    });
 
     // =========================================================================
     // --- Likes & Comments (Supabase-backed, shared across all devices) ---
